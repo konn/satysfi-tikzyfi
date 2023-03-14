@@ -57,6 +57,10 @@ This can also be written as:
   ];
 ```
 
+More complex example:
+
+![Complex network](doc/images/02-complex-network.png)
+
 See [`example.saty`](./example.saty) (and [`example.pdf`](./example.pdf)) for details.
 
 ## TODOs
