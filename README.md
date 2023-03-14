@@ -2,7 +2,7 @@
 
 ## Motivation
 
-A mostly incomplete, unSATySFiing realisation of a really small subset of TikZ in SATySFi.
+A mostly incomplete, unSATySFiing realisation of a really small subset of TikZ in [SATySFi](https://github.com/gfngfn/SATySFi).
 
 We want to port the following TikZ features in SATySFi:
 
