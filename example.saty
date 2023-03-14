@@ -1,0 +1,147 @@
+@require: latexcmds/latexcmds
+@require: code-printer/code-printer
+@require: code-printer/code-syntax
+@require: code-printer/code-theme
+@require: code-printer/code-design
+@require: stdja
+% @require: tikzyfi
+@import: ./tikzyfi
+@import: ./utils
+
+open TikZyFi
+open Utils
+
+let satysfi = CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+      |> CodePrinter.set-number-fun CodeDesign.number-fun-null
+      |> CodePrinter.set-basic-font-size 10pt
+let cfg = (|default with 
+  default-node-style = default-node-style |> circle;
+  unit-length = 0.75cm;
+|)
+let op = apps [circle; fc Color.white] 
+let inp = apps [circle; fc (Color.gray 0.75)]
+let delta-size = 10pt
+let delta ?:dist pos x = 
+      node-at?:[plain;distance (Option.unwrap-or 4pt dist)](pos) {\fontsize(delta-size){#x;}}
+let-inline \diag1 = 
+  { \tikzy?:(cfg)
+    [ matrix 
+      [ [ node?:[inp; named `x`] {${x}} ]
+      ; [ empty     ; empty ; empty            
+        ; node?:[op; named `+`]{${+}} ; empty
+        ; node?:[op; named `sin`]{${\sin}}
+        ]
+      ; [ node?:[inp; named `y`] {${y}} ; empty 
+        ; node?:[op; named `square`] {${\times}} ; empty; empty; empty; empty
+        ; node?:[op; named `mul`]{${\times}}; empty
+        ; node?:[inp; named `w`] {${w}} 
+        ]
+      ; []
+      ; [ node?:[inp; named `z`] {${z}} ; empty; empty; empty; empty
+        ; node?:[op; named `exp`] {${e^{\bullet}}} 
+        ]
+      ]
+    ; delta?:(25pt)(north-east-of `w`){${\frac{\partial w}{\partial w} = 1}}
+    ; delta(north-of `mul`){${1}}
+    ; delta(north-of `sin`){${e^z \cdot 1}}
+    ; delta?:(15pt)(south-of `exp`){${\sin(x + y^2) \cdot 1}}
+    ; delta(north-of `+`){${e^z \cos(x + y^2)}}
+    ; delta?:(15pt)(south-of `z`){${\sin(x + y^2) e^z}}
+    ; delta(north-of `x`){${e^z \cdot \cos(x + y^2)}}
+    ; delta?:(25pt)(south-east-of `square`){
+        ${e^z \cos(x + y^2)}
+      }
+    ; delta?:(25pt)(north-west-of `y`){
+        ${y e^z\cos(x + y^2)}
+      }
+    ; delta?:(25pt)(south-west-of `y`){
+        ${y e^z\cos(x + y^2)}
+      }
+    ; delta?:(50pt)(west-of `y`){
+        ${2y e^z\cos(x + y^2)}
+      }
+    ; arrow (east-of `x`) (north-west-of `+`)
+    ; arrow (north-east-of `y`) (north-west-of `square`)
+    ; arrow (south-east-of `y`) (south-west-of `square`)
+    ; arrow (east-of `z`) (west-of `exp`)
+    ; arrow (north-east-of `square`) (south-west-of `+`)
+    ; arrow (east-of `+`) (west-of `sin`)
+    ; arrow (east-of `sin`) (north-west-of `mul`)
+    ; arrow (east-of `exp`) (south-west-of `mul`)
+    ; arrow (east-of `mul`) (west-of `w`)
+    ];
+  }
+
+in 
+
+StdJa.document (|
+  title = {TikZyFi Examples};
+  author = {Hiromi ISHII};
+  show-title = true;
+  show-toc = false;
+|) '<
+  +section{Simple Diagram}<
+    +code-printer?:(satysfi)(```\tikzy?:(|default with unit-length = 1.5cm|)[
+  matrix[ 
+    [ node?:[named `X`] {${X}}
+    ; node?:[named `XxY`]{${X \times Y}}
+    ; node?:[named `Y`] {${Y}} ]
+    ; [ empty; node?:[named `Z`]{${Z}}] ]
+  ; arrow (west-of `XxY`) (east-of `X`)
+  ; arrow (east-of `XxY`) (west-of `Y`)
+  ; arrow (north-west-of `Z`) (south-east-of `X`)
+  ; arrow (north-east-of `Z`) (south-west-of `Y`)
+  ; arrow (north-of `Z`) (south-of `XxY`) ];
+```);
+    +centering{
+      \tikzy?:(|default with unit-length = 1.5cm|)[
+        matrix?:(`mat`)
+        [ [ node?:[named `X`] {${X}}
+          ; node?:[named `XxY`]{${X \times Y}}
+          ; node?:[named `Y`] {${Y}}
+          ]
+        ; [ empty; node?:[named `Z`]{${Z}}]
+        ]
+      ; arrow (west-of `XxY`) (east-of `X`)
+      ; arrow (east-of `XxY`) (west-of `Y`)
+      ; arrow (north-west-of `Z`) (south-east-of `X`)
+      ; arrow (north-east-of `Z`) (south-west-of `Y`)
+      ; arrow (north-of `Z`) (south-of `XxY`)
+      ];
+    }
+
+    +p{
+      This can also be written as:
+    }
+
+    +code-printer?:(satysfi)(```\tikzy?:(|default with unit-length = 1.5cm|)
+  [ matrix?:(`mat`)
+    [ [ node {${X}}; node {${X \times Y}}; node {${Y}} ]]
+  ; node-at ?:[named `Z`] (south-of `mat-0-1`) {${Z}}
+  ; arrow (west-of `mat-0-1`) (east-of `mat-0-0`)
+  ; arrow (east-of `mat-0-1`) (west-of `mat-0-2`)
+  ; arrow (north-west-of `Z`) (south-east-of `mat-0-0`)
+  ; arrow (north-east-of `Z`) (south-west-of `mat-0-2`)
+  ; arrow (north-of `Z`) (south-of `mat-0-1`) ];
+```);
+
+    +centering{
+      \tikzy?:(|default with unit-length = 1.5cm|)
+        [ matrix?:(`mat`)
+          [ [ node {${X}}; node {${X \times Y}}; node {${Y}} ]]
+        ; node-at ?:[named `Z`] (south-of `mat-0-1`) {${Z}}
+        ; arrow (west-of `mat-0-1`) (east-of `mat-0-0`)
+        ; arrow (east-of `mat-0-1`) (west-of `mat-0-2`)
+        ; arrow (north-west-of `Z`) (south-east-of `mat-0-0`)
+        ; arrow (north-east-of `Z`) (south-west-of `mat-0-2`)
+        ; arrow (north-of `Z`) (south-of `mat-0-1`) ];
+    }
+
+  >
+
+  +section{Complex Diagram}<
+    +p{To see how to draw the following, refer the definition of \code(`\diag1;`); in \code(`example.saty`);.}
+    +centering{\diag1;}
+  >
+>
+

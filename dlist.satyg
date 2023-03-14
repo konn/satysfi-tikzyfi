@@ -1,0 +1,24 @@
+% Difference List
+@require: base/base
+@require: base/fn
+@require: base/list-ext
+
+module DList : sig
+  type 'a t
+  val empty : 'a t
+  val singleton : 'a -> 'a t
+  val cons : 'a -> 'a t -> 'a t
+  val snoc : 'a t -> 'a -> 'a t
+  val append : 'a t -> 'a t -> 'a t
+  val of-list : 'a list -> 'a t
+  val to-list : 'a t -> 'a list
+end = struct
+  type 'a t = DList of ('a list -> 'a list)
+  let singleton x = DList (fun xs -> x :: xs)
+  let empty = DList Fn.id
+  let cons a (DList f) = DList (fun xs -> a :: f xs)
+  let snoc (DList f) a = DList (fun xs -> f (a :: xs))
+  let append (DList f) (DList g) = DList (fun xs -> f (g xs))
+  let of-list xs = DList (List.append xs)
+  let to-list (DList f) = f []
+end

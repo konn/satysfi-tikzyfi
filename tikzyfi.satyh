@@ -1,0 +1,449 @@
+@require: gr
+@require: base/base
+@require: base/tree-map
+@require: base/tree-set
+@require: base/ord
+@require: base/length
+@require: base/string
+@require: base/list-ext
+@require: base/option-ext
+@require: base/fn
+@require: base/random
+@require: base/tuple
+@require: Color
+@require: arrows/arrows
+
+@import: utils
+@import: dlist
+@import: algorithms
+
+type direction
+  = North | South | East | West
+  | NorthEast | NorthWest
+  | SouthEast | SouthWest
+  | Center
+type shape = Plain | Circle | Rect
+type node-style = (|
+  shape: shape;
+  fill-color: color;
+  stroke-color: color;
+  padding: length;
+  name: string option;
+  distance: length option;
+|)
+type config = (|unit-length: length; default-node-style : node-style|)
+type matrix-config = (|
+  unit-length: length;
+  matrix-name: string;
+  default-node-style : node-style;
+|)
+type position = Absolute of point | Relative of direction * string
+
+type matrix-node = (|name : string option; shape : shape;|)
+
+module TikZyFi : sig
+  type node
+  type element
+  val matrix: string ?-> (node list) list -> element
+  val node-at: (node-style -> node-style) list ?-> position -> inline-text -> element
+  val arrow: position -> position -> element
+  val empty: node
+  val node: (node-style -> node-style) list ?-> inline-text -> node
+  val fc: color -> node-style -> node-style
+  val lc: color -> node-style -> node-style
+  val distance: length -> node-style -> node-style
+  val named: string -> node-style -> node-style
+  val circle: node-style -> node-style
+  val rect: node-style -> node-style
+  val plain: node-style -> node-style
+  val default: config
+  val default-matrix: matrix-config
+  val default-node-style: node-style
+  val coord: point -> position
+  val north-of: string -> position
+  val south-of: string -> position
+  val west-of: string -> position
+  val east-of: string -> position
+  val north-west-of: string -> position
+  val north-east-of: string -> position
+  val south-west-of: string -> position
+  val south-east-of: string -> position
+  direct \matrix: [matrix-config?; (node list) list] inline-cmd
+  direct \tikzy: [config?; element list] inline-cmd
+end = struct
+  open Gr
+  open Random
+  open Algorithms
+  open Utils
+
+  type extent = (|width : length; height: length; depth: length|)
+  let extent-of inl =
+      let (w, h, d) = get-natural-metrics inl
+      in (|width = w; height = h; depth = d|)
+
+  let default-node-style: node-style =
+    (|shape = Plain; padding = 5pt
+    ; stroke-color = Color.black
+    ; fill-color = Color.white
+    ; name = None
+    ; distance = None
+    |)
+
+  let named name = fun opt -> (|opt with name = Some(name)|)
+  let distance d = fun x -> (| x with distance = Some(d) |)
+
+  let len-ord = Ord.make
+        (fun x y -> (if x <' y
+          then Lt
+          else if x >' y then Gt else Eq)
+        )
+  let default : config = (|unit-length = 1cm ; default-node-style = default-node-style |)
+
+  let fc c = fun x -> (| x with fill-color = c |)
+  let lc c = fun x -> (| x with stroke-color = c |)
+  let circle = fun x -> (| x with shape = Circle|)
+  let rect = fun x -> (| x with shape = Rect|)
+  let plain = fun x -> (| x with shape = Plain|)
+
+  let graphics-extent grs =
+    let ((min-x, min-y), (max-x, max-y)) =
+        Option.unwrap-or ((0pt, 0pt), (0pt, 0pt))
+          (fold-map
+            None
+            (fun l r ->
+              (match (l, r) with
+              | (None, None) -> None
+              | (Some(bb), None) -> Some(bb)
+              | (None, Some(bb)) -> Some(bb)
+              | (Some((xmin, ymin), (xmax, ymax)), Some((xmin1, ymin1), (xmax1, ymax1))) ->
+                  Some(
+                    (Length.min xmin xmin1, Length.min ymin ymin1),
+                    (Length.max xmax xmax1, Length.max ymax ymax1)
+                  )
+              )
+            )
+            (fun gr -> Some(get-graphics-bbox gr))
+            grs
+          )
+    in (|bbox = ((min-x, min-y), (max-x, max-y))
+        ; width = max-x -' min-x; height = max-y -' min-y|)
+
+  let render-graphics grs =
+    let extent = graphics-extent grs
+    in  inline-graphics extent#width extent#height 0pt
+          (fun pt -> List.map (shift-graphics (sub-pt pt (Pair.fst extent#bbox))) grs)
+
+  let default-pads = (3pt, 3pt, 3pt, 3pt)
+
+  let plain = fun style -> (|style with shape = Plain|)
+
+  let empty-style: node-style = (|default-node-style with padding=0pt; shape=Plain; distance = None|)
+  type node = Node of (|style : node-style -> node-style; body: inline-text|)
+  let empty = Node (|style = Fn.const empty-style; body = {}|)
+  let node ?:styler body = Node (|style = Option.map-or Fn.id Utils.apps styler; body = body|)
+  type raw-node = (|position: position; style: node-style -> node-style; body: inline-text|)
+  type abs-box-node = (|position: point; style: node-style; body: inline-boxes|)
+
+  type element
+    = Matrix of string option * (node list) list
+    | ANode of raw-node
+    | Arrow of position * position
+
+  let matrix ?:name rows = Matrix (name, rows)
+  let node-at ?:styler position body =
+        ANode
+          (|position = position
+          ; style = Option.map-or Fn.id Utils.apps styler
+          ; body = body
+          |)
+  let arrow from to = Arrow (from, to)
+
+  let pads-of style = (style#padding, style#padding, style#padding, style#padding)
+
+  let locate-rect ((x0, y0), (x1, y1)) dir =
+        match dir with
+        | Center -> ((x0 +' x1) *' 0.5, (y0 +' y1) *' 0.5)
+        | North  -> ((x0 +' x1) *' 0.5, y1)
+        | South -> ((x0 +' x1) *' 0.5, y0)
+        | East  -> (x1, (y0 +' y1) *' 0.5)
+        | West  -> (x0, (y0 +' y1) *' 0.5)
+        | NorthEast -> (x1, y1)
+        | NorthWest -> (x0, y1)
+        | SouthEast -> (x1, y0)
+        | SouthWest -> (x0, y0)
+
+  let locate-plain = locate-rect
+  let locate-circle ((x0, y0), (x1, y1)) dir =
+    let r = (x1 -' x0) *' 0.5
+    in let center = ((x0 +' x1) *' 0.5, (y0 +' y1) *' 0.5)
+    in let pi = 3.141592653589793238462
+    in let deg =
+        match dir with
+        | Center -> None
+        | North -> Some(pi /. 2.0)
+        | South -> Some(pi /. (-2.0))
+        | East -> Some(0.0)
+        | West -> Some(pi)
+        | NorthEast -> Some(pi /. 4.0)
+        | NorthWest -> Some(3.0 *. pi /. 4.0)
+        | SouthEast -> Some(pi /. (-4.0))
+        | SouthWest -> Some(5.0 *. pi /. 4.0)
+    in match deg with
+       | None  -> center
+       | Some(deg) -> Utils.add-pt center (r *' cos deg, r *' sin deg)
+
+
+  let draw-node-shape-with f style =
+      inline-frame-outer (pads-of style)
+      (fun pt w h d ->
+        (let circle = f style pt w h d
+        in [ stroke 1pt style#stroke-color circle
+           ; fill style#fill-color circle
+          ]
+        )
+      )
+
+  let circled =
+    draw-node-shape-with
+      (fun style (x, y) w h d ->
+        (let center = (x +' w *' 0.5, y +' (h -' d) *' 0.5)
+        in let r = Length.max w (h -' d) *' 0.5 +' style#padding
+        in Gr.circle center r
+        )
+      )
+
+  let rectify =
+    draw-node-shape-with
+    (fun style (x, y) w h d ->
+      ( let llc = (x, y -' d)
+        in let urc = (x +' w, y +' h)
+        in Gr.rectangle llc urc
+      )
+    )
+
+  let to-geometric-node-with l gr = l (get-graphics-bbox gr)
+
+  % In the absolute coordinate system
+  let locator-of shape =
+    match shape with
+    | Plain   -> to-geometric-node-with locate-plain
+    | Rect    -> to-geometric-node-with locate-rect
+    | Circle  -> to-geometric-node-with locate-circle
+
+  let process-node-raw ctx cfg node =
+    let style = node#style cfg#default-node-style in
+    let it = node#body in
+    let pads = (style#padding, style#padding, style#padding, style#padding)  in
+    let node = match style#shape with
+        | Plain   -> read-inline ctx it
+        | Rect    -> rectify style (read-inline ctx it)
+        | Circle  -> circled style (read-inline ctx it)
+    in (node, style)
+
+  let process-node ctx cfg (Node node) = process-node-raw ctx cfg node
+
+  let calc-center (xstart, ystart) ib =
+    let ext = extent-of ib
+      in let center-x = xstart -' ext#width *' 0.5
+      in let center-y = ystart -' (ext#height +' ext#depth) *' 0.5
+      in (center-x, center-y)
+
+  let pair-app app app2 = fun (l, r) (l1, r1) -> (app l l1, app2 r r1)
+
+  let place-matrix-nodes ctx cfg xss =
+    let dx = cfg#unit-length in
+    let dy = cfg#unit-length in
+    let ibs = List.map (List.map (process-node ctx cfg)) (List.reverse xss) in
+    let extents: (extent list) list =
+          List.map (List.map (Fn.compose extent-of Pair.fst)) ibs
+    in let col-widths = List.map
+          (Fn.compose (Option.unwrap-or 0pt)
+            (Fn.compose
+              (List.max len-ord)
+              (List.map (fun ext -> ext#width))
+            )
+          )
+          (pad-transpose (|width=0pt;height=0pt;depth=0pt|) extents)
+    in let row-heights = (List.map
+          (Fn.compose (Option.unwrap-or 0pt)
+            (Fn.compose (List.max len-ord)
+              (List.map (fun ext -> ext#height +' ext#depth))
+            )
+          )
+          extents
+        )
+    in let xoffs: length list =
+          prescan-left
+            (fun off w -> off +' w +' dx)
+            0pt
+              col-widths
+    in let yoffs: length list =
+          prescan-lefti
+            (fun yn off ht -> off +' ht +' dy)
+            0pt
+            row-heights
+    in let num-rows = List.length xss
+    in let dic-dl =
+          fold-zip-3i
+            DList.empty DList.append
+            (fun yn ystart row-height ->
+              fold-zip-3i
+                DList.empty DList.append
+                (fun xn xstart col-width (ib, style) ->
+                  ( let name =
+                       match style#name with
+                        | Some(name) -> name
+                        | None -> cfg#matrix-name ^ `-` ^ arabic (num-rows - yn - 1) ^ `-` ^ arabic xn
+                    in let node =
+                          (|position =
+                              Absolute
+                                ( xstart +' col-width *' 0.5, 
+                                  ystart +' row-height *' 0.5
+                                )
+                          ; body = ib
+                          ; style = style
+                          |)
+                    in DList.singleton (name, node)
+                  )
+                )
+                xoffs
+                col-widths
+            )
+            yoffs
+            row-heights
+            ibs
+    in TreeMap.of-list String.ord (DList.to-list dic-dl)
+
+  let make-diagram ctx paths = []
+  let as-matrix-config: string -> config -> matrix-config = fun nam cfg ->
+      (|default-node-style = cfg#default-node-style
+      ; unit-length = cfg#unit-length
+      ; matrix-name = nam
+      |)
+  let default-matrix = as-matrix-config `mat` default
+
+  let draw-abs-box-node bnode = draw-text bnode#position bnode#body
+
+  let center-of ((x1 ,y1), (x2, y2)) =
+      ((x1 +' x2) *' 0.5, (y1 +' y2) *' 0.5)
+
+  let dir-of pad dir targ =
+    let center = center-of (get-graphics-bbox targ#body)
+    in let endpt =
+          locator-of targ#style#shape targ#body dir
+    in let (dx0, dy0) = Utils.sub-pt endpt center
+    in let theta = atan2 (dy0 /' 1pt) (dx0 /' 1pt)
+    in let dxy =
+          Utils.add-pt (dx0, dy0)
+            ( pad *' cos theta
+            , pad *' sin theta
+            )
+    in Utils.add-pt endpt dxy
+
+  let get-dir-of pad poss pos =
+      match pos with
+      | Absolute pt -> pt
+      | Relative (dir, parent) ->
+        ( let targ =
+            Option.expect (`No target node: ` ^ parent)
+              (TreeMap.get String.ord parent poss)
+          in dir-of pad dir targ
+          )
+
+  let coord pt = Absolute pt
+  let north-of s = Relative (North, s)
+  let south-of s = Relative (South, s)
+  let west-of s = Relative (West, s)
+  let east-of s = Relative (East, s)
+  let north-east-of s = Relative (NorthEast, s)
+  let north-west-of s = Relative (NorthWest, s)
+  let south-east-of s = Relative (SouthEast, s)
+  let south-west-of s = Relative (SouthWest, s)
+
+  let resolve-raw-node ctx cfg (name, raw) poss =
+    let ext = extent-of raw#body
+    in let center =
+          get-dir-of
+            (Option.unwrap-or cfg#unit-length raw#style#distance)
+            poss raw#position
+    in let position = calc-center center raw#body
+    in let graphic = draw-text position raw#body
+    in let node2 = (|position = position; body = graphic; style = raw#style|)
+    in let (x, y) = position
+    in TreeMap.insert String.ord name node2 poss
+
+  let toEdge b =
+    match b#position with
+      | Absolute _ -> None
+      | Relative (_, targ) -> Some(targ)
+
+  let dfs = topsort String.ord toEdge
+
+  let process-elem ctx cfg key elt =
+      match elt with
+      | Matrix (mname, rows) ->
+          (place-matrix-nodes ctx
+            (as-matrix-config (Option.unwrap-or key mname) cfg)
+            rows
+          , DList.empty
+          )
+      | ANode raw ->
+          (let (node, style) = process-node-raw ctx cfg raw
+          in let style0 = raw#style cfg#default-node-style
+          in let name = Option.unwrap-or key style0#name
+          in let final = (|position = raw#position; style = style; body = node|)
+          in (TreeMap.of-list String.ord [(name, final)], DList.empty)
+          )
+      | Arrow(src, tgt) -> (TreeMap.empty, DList.singleton (src, tgt))
+
+  let display env =
+      List.fold-right
+        (fun (k, v) shown ->
+            `(` ^ k ^ `, `
+              ^ Option.map-or `None` (fun s -> `Some(` ^ s ^ `)`) v
+              ^ `); ` ^ shown)
+        String.empty
+        (List.map (fun (nam, b) -> (nam, toEdge b)) (TreeMap.to-list env))
+
+  let draw-arrow ctx cfg node-dic (src, tgt) =
+    let cfg2 = (|cfg with unit-length = -5pt|)
+    in let src-pt = get-dir-of -2pt node-dic src
+    in let tgt-pt = get-dir-of -2pt node-dic tgt
+    in let theta = atan2-pt (sub-pt tgt-pt src-pt)
+    in let drawer = Arrow.read (Arrow.solid (|line-width = 0.05; head-size = 0.3|)) ctx
+    in DList.of-list (drawer#draw src-pt tgt-pt)
+
+  let make-tikzy ctx cfg elems =
+    let uuid = `#!tikz-` ^ arabic (random())
+    in let (ini-nodes, arrows0) =
+          fold-mapi
+            (TreeMap.empty, DList.empty)
+            (Utils.biap (union String.ord) DList.append)
+            (fun n -> process-elem ctx cfg (uuid ^ `@` ^ arabic n))
+            elems
+    in let arrows = DList.to-list arrows0
+    in let sorted: (string * raw-node) list =
+          concat
+          (Option.expect
+            (`Cycle detected! ` ^ display ini-nodes)
+            (dfs ini-nodes)
+          )
+    in let node-dic =
+          List.fold-right (resolve-raw-node ctx cfg) TreeMap.empty sorted
+    in let node-grs = List.map (fun (_, node) -> node#body)
+              (TreeMap.to-list node-dic)
+    in let arrow-grs =
+          DList.to-list
+          (fold-map DList.empty DList.append
+            (draw-arrow ctx cfg node-dic) arrows
+          )
+    in render-graphics (List.append node-grs arrow-grs)
+
+  let-inline ctx \matrix ?:cfg0 xss =
+    let cfg = Option.unwrap-or default-matrix cfg0
+    in make-tikzy ctx cfg [matrix ?:(`mat`) xss]
+
+  let-inline ctx \tikzy ?:cfg0 elems =
+    let cfg = Option.unwrap-or default cfg0
+    in make-tikzy ctx cfg elems
+end

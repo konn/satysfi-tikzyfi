@@ -1,0 +1,187 @@
+@require: base/base
+@require: base/tree-map
+@require: base/tree-set
+@require: base/option-ext
+
+type 'a 'b these = 
+  This of 'a | That of 'b | These of 'a * 'b
+
+module Algorithms : sig
+  type 'a 'b these
+  val topsort: 
+      'k Ord.t -> ('v -> 'k option) -> 
+      'k 'v TreeMap.t -> ((('k * 'v) list) list) option
+  val align-with: ('a 'b these -> 'c) -> 'a list -> 'b list -> 'c list
+  val zip-with: ('a -> 'b -> 'c) -> 'a list -> 'b list -> 'c list
+  val zip-with-3: ('a -> 'b -> 'c -> 'd) -> 'a list -> 'b list -> 'c list -> 'd list
+  val pad-transpose: 'a -> ('a list) list -> ('a list) list
+  val prescan-left: ('a -> 'b -> 'a) -> 'a -> 'b list -> 'a list
+  val prescan-lefti: (int -> 'a -> 'b -> 'a) -> 'a -> 'b list -> 'a list
+  val fold-map : 
+        'w -> ('w -> 'w -> 'w) -> ('a -> 'w) -> 'a list -> 'w
+  val fold-mapi : 
+        'w -> ('w -> 'w -> 'w) -> (int -> 'a -> 'w) -> 'a list -> 'w
+  val fold-zipi : 
+        'w -> ('w -> 'w -> 'w) -> 
+        (int -> 'a -> 'b -> 'w) -> 
+        'a list -> 'b list -> 'w
+  val fold-zip-3i : 
+        'w -> ('w -> 'w -> 'w) -> 
+        (int -> 'a -> 'b -> 'c -> 'w) -> 
+        'a list -> 'b list -> 'c list -> 'w
+  val map-accum-left : ('s -> 'a -> ('s * 'b)) -> 's -> 'a list -> 's * 'b list
+  val concat: ('a list) list -> 'a list
+  val union: 'k Ord.t -> 'k 'v TreeMap.t -> 'k 'v TreeMap.t -> 'k 'v TreeMap.t
+end = struct
+  let concat xss = List.fold-right List.append [] xss
+  let incr ord toEdge (ident, mpos) inDegs  =
+    let indegs1 = TreeMap.insert ord ident 0 inDegs in
+    match toEdge mpos with
+    | Some(targ) -> 
+        (match TreeMap.get ord targ indegs1 with
+            | None -> TreeMap.insert ord targ 1 indegs1
+            | Some(n) -> TreeMap.insert ord targ (n + 1) indegs1)
+    | _ -> indegs1
+  let dfs2 ord toEdge starts graph =
+      let-rec
+        go1 vis x = 
+          if TreeSet.mem ord vis x
+          then (vis, [])
+          else 
+            let vis2 = TreeSet.insert ord x vis in
+            let source = Option.expect `Node not found` (TreeMap.get ord x graph) in
+            match toEdge source with
+            | Some(targ) -> 
+                let (vis3, ys) = go1 vis2 targ
+                in (vis3, (x, source) :: ys)
+            | None -> (vis2, [(x, source)])
+      in let-rec
+          go 
+            | vis [] acc = acc
+            | vis (x :: xs) acc =
+                let (vis2, xreach) = go1 vis x
+                in go vis2 xs (xreach :: acc)
+      in go TreeSet.empty starts []
+  let topsort ord toEdge graph = 
+    let inDegs = 
+          List.fold 
+              TreeMap.empty
+              (incr ord toEdge) 
+              (TreeMap.to-list graph) in
+    let lones0 = 
+          List.filter (fun (_, d) -> d == 0) (TreeMap.to-list inDegs) in
+    let lones = List.map (fun (x, _) -> x) lones0 in
+    let sorted = dfs2 ord toEdge lones graph in
+    let order = 
+          TreeSet.size 
+          (TreeSet.of-list ord 
+          (List.map (fun (x, _) -> x) (TreeMap.to-list inDegs))
+          ) in
+    let sortedOrder = List.fold 0 (fun l r -> List.length l + r) sorted in
+    if (order == sortedOrder)
+    then Some(sorted)
+    else None
+  let-rec
+    align-with
+      | f [] [] = []
+      | f xs [] = List.map (fun x -> f (This x)) xs
+      | f [] ys = List.map (fun y -> f (That y)) ys
+      | f (x :: xs) (y :: ys) = f (These (x, y)) :: align-with f xs ys
+  let-rec
+    align-with
+      | f [] [] = []
+      | f xs [] = List.map (fun x -> f (This x)) xs
+      | f [] ys = List.map (fun y -> f (That y)) ys
+      | f (x :: xs) (y :: ys) = f (These (x, y)) :: align-with f xs ys
+
+  let-rec
+    zip-with
+      | f [] _ = []
+      | f _ [] = []
+      | f (x :: xs) (y :: ys) = f x y :: zip-with f xs ys
+
+  let-rec
+    zip-with-3
+      | f [] _ _ = []
+      | f _ [] _ = []
+      | f _ _ [] = []
+      | f (x :: xs) (y :: ys) (z :: zs) = f x y z :: zip-with-3 f xs ys zs
+
+  let pad-transpose def xss = 
+        let-rec 
+          go | [] = (0, [])
+             | (xs :: xss) =
+                let (n, yss) = go xss in
+                let trans = align-with 
+                      (fun ths -> 
+                          (match ths with
+                          | This x -> x :: List.repeat n def
+                          | That ys -> def :: ys
+                          | These (x, ys) -> x :: ys
+                          )
+                      )
+                      xs
+                      yss
+                in (n + 1, trans)
+        in
+        let (_, ans) = go xss
+        in ans
+
+  let fold-map mempty mappend f =
+    List.fold-left (fun w a -> mappend w (f a)) mempty
+
+  let fold-mapi mempty mappend f =
+    List.fold-lefti (fun i w a -> mappend w (f i a)) mempty
+
+  let fold-zipi empty append f =
+        let-rec go 
+            | _ [] _ = empty
+            | _ _ [] = empty
+            | n (x :: xs) (y :: ys) = 
+                append (f n x y) (go (n + 1) xs ys)
+        in go 0
+
+  let fold-zip-3i empty append f =
+        let-rec go 
+            | _ [] _ _ = empty
+            | _ _ [] _ = empty
+            | _ _ _ [] = empty
+            | n (x :: xs) (y :: ys) (z :: zs) = 
+                append (f n x y z) (go (n + 1) xs ys zs)
+        in go 0
+
+  let prescan-left f =
+    let-rec go 
+      |  _ [] = []
+      | z0 (x :: xs) = 
+          let z = f z0 x in z0 :: go z xs
+  in go
+
+  let prescan-lefti f =
+    let-rec go 
+      | _  _ [] = []
+      | n z0 (x :: xs) = 
+          let z = f n z0 x in z0 :: go (n + 1) z xs
+  in go 0
+
+  let map-accum-left f =
+    let-rec go
+      | s [] = (s, [])
+      | s (x :: xs) = 
+          let (s2, y) = f s x in 
+          let (s3, ys) = go s2 xs in
+          (s3, y :: ys)
+    in go
+  
+  % FIXME: Treats assymmetry
+  let union ord l r =
+    if TreeMap.size l < TreeMap.size r
+    then List.fold-left 
+            (fun dic (k, v) -> TreeMap.insert ord k v dic)
+            r
+            (TreeMap.to-list r)
+    else List.fold-left 
+          (fun dic (k, v) -> TreeMap.insert ord k v dic)
+          l
+          (TreeMap.to-list r)
+end
