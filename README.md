@@ -74,6 +74,8 @@ See [`example.saty`](./example.saty) (and [`example.pdf`](./example.pdf)) for de
 - [ ] Correct distinction/handling of anchors and centers
 - [ ] Make it a SATySFi package and publish it to Satyrographos
 - [ ] Make the layout engine sane
-- [ ] Consider using envelopes (ala `diagrams` package in Haskell)
+- [ ] Consider using abstraction with envelopes and traces (ala `diagrams` package in Haskell, as described in the paper "[Monoids: themes and variations][Monoids]" by Brent Yorgey.)
 - [ ] Use `right`, `left`, `above`, and `below` instead of `east`, `west`, `north` and `south`.
 - [ ] More usable default placing heuristics with relative positioning.
+
+[Monoids]: https://dl.acm.org/doi/10.1145/2430532.2364520
